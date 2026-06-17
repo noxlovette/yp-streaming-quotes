@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 rand = "0.10"
+thiserror = "2.0.18"
 
 [lib]
 path = "src/lib.rs"
