@@ -1,5 +1,5 @@
-use crate::{ProtocolError, tickers::TickerRegistry};
-use std::net::SocketAddr;
+use crate::{ProtocolError, tickers::REGISTRY};
+use std::{fmt, net::SocketAddr};
 
 /// The parsed form of a `STREAM <ticker> <ip> <port>\n` line.
 #[derive(Debug)]
@@ -30,12 +30,20 @@ where
         }
     }
 }
-
 impl Response {
-    pub fn to_wire(&self) -> String {
+    pub fn as_bytes(&self) -> Vec<u8> {
         match self {
-            Response::Ok => "OK\n".to_string(),
-            Response::Err(reason) => format!("ERR {reason}\n"),
+            Response::Ok => b"OK\n".to_vec(),
+            Response::Err(reason) => format!("ERR {reason}\n").into_bytes(),
+        }
+    }
+}
+
+impl fmt::Display for Response {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Response::Ok => f.write_str("OK\n"),
+            Response::Err(reason) => write!(f, "ERR {reason}\n"),
         }
     }
 }
@@ -47,22 +55,33 @@ impl StreamCommand {
     ///
     /// Returns `ProtocolError` on any malformed input.
     pub fn parse(line: &str) -> Result<Self, ProtocolError> {
-        // TODO: implement this function
-        // Steps:
-        //   1. Split `line` by whitespace — expect exactly 4 tokens
-        //   2. Check the first token is "STREAM" (else UnknownCommand)
-        //   3. Extract ticker (token[1])
-        //   4. Parse IP+port into a SocketAddr — hint: format!("{}:{}", ip, port)
-        //      then call .parse::<SocketAddr>()
-        //   5. Return Ok(StreamCommand { ticker, udp_addr })
-        todo!()
-    }
+        let mut tokens = line.split_whitespace();
 
-    fn validate(&self, reg: &TickerRegistry) -> Result<(), ProtocolError> {
-        if !reg.is_valid(&self.ticker) {
-            Err(ProtocolError::UnknownCommand(self.ticker.to_string()))
-        } else {
-            Ok(())
+        match tokens.next() {
+            Some("STREAM") => {}
+            _ => return Err(ProtocolError::UnknownCommand(line.to_string())),
         }
+
+        let ticker = tokens
+            .next()
+            .ok_or(ProtocolError::InvalidArguments)?
+            .to_string();
+
+        if !REGISTRY.validate(&ticker) {
+            return Err(ProtocolError::UnknownCommand(ticker.to_string()));
+        };
+
+        let ip = tokens.next().ok_or(ProtocolError::InvalidArguments)?;
+
+        let port = tokens.next().ok_or(ProtocolError::InvalidArguments)?;
+
+        if tokens.next().is_some() {
+            return Err(ProtocolError::InvalidArguments); // too many tokens
+        }
+
+        Ok(StreamCommand {
+            ticker,
+            udp_addr: format!("{}:{}", ip, port).parse()?,
+        })
     }
 }

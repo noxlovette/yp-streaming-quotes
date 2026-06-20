@@ -1,4 +1,7 @@
-use std::num::{ParseFloatError, ParseIntError};
+use std::{
+    net::AddrParseError,
+    num::{ParseFloatError, ParseIntError},
+};
 
 use thiserror::Error;
 use tokio::io;
@@ -38,6 +41,9 @@ pub enum ProtocolError {
     #[error("IO Error: {0}")]
     Io(#[from] io::Error),
 
-    #[error("invalid port: {0}")]
-    InvalidPort(ParseIntError),
+    #[error("invalid addr: {0}")]
+    InvalidAddr(#[from] AddrParseError),
+
+    #[error("invalid arguments")]
+    InvalidArguments,
 }

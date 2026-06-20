@@ -1,5 +1,9 @@
 use crate::{QuoteError, QuoteResult};
-use std::str::FromStr;
+use rand::RngExt;
+use std::{
+    str::FromStr,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StockQuote {
@@ -71,6 +75,23 @@ impl StockQuote {
         }
 
         builder.build()
+    }
+
+    pub fn generate(ticker: &str) -> Self {
+        let mut rng = rand::rng();
+        let price =
+            (rng.random::<f64>() * 490.0 + 10.0 * 100.0).round() / 100.0;
+        let volume = rng.random_range(100u32..=10_000_000u32);
+        let timestamp_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        StockQuote {
+            ticker: ticker.to_string(),
+            price,
+            volume,
+            timestamp_ms,
+        }
     }
 }
 

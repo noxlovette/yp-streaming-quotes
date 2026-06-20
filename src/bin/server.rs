@@ -1,12 +1,9 @@
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::time::Duration;
-
 use streaming_quotes::ProtocolError;
-use streaming_quotes::protocol::StreamCommand;
+use streaming_quotes::protocol::{Response, StreamCommand};
 use streaming_quotes::quote::StockQuote;
-use streaming_quotes::tickers::TickerRegistry;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 
 const TCP_PORT: u16 = 7777;
@@ -14,39 +11,50 @@ const UDP_INTERVAL_MS: u64 = 200;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let registry = TickerRegistry::new();
     let addr = format!("0.0.0.0:{TCP_PORT}");
     let listener = TcpListener::bind(&addr).await?;
-    println!("TCP server listening on {addr}");
+    tracing::info!("TCP server listening on {addr}");
 
     loop {
         let (stream, peer) = listener.accept().await?;
         println!("connection from {peer}");
-        tokio::spawn(handle_connection(stream, peer, registry.clone()));
+        tokio::spawn(handle_connection(stream, peer));
     }
 }
-
 async fn handle_connection(
     mut stream: TcpStream,
     peer: SocketAddr,
-    registry: Arc<TickerRegistry>,
 ) -> Result<(), ProtocolError> {
     let (reader, mut writer) = stream.split();
     let mut lines = BufReader::new(reader).lines();
 
-    let line = lines
-        .next_line()
-        .await?
-        .ok_or(ProtocolError::Malformed("Empty line"))?;
-    let command = StreamCommand::parse(line.trim())?;
-    tokio::spawn(async move {
-        if let Err(e) =
-            stream_udp(command.ticker.clone(), command.udp_addr.clone()).await
-        {
-            eprintln!("udp stream error for {peer}: {e}");
+    let result = async {
+        let line = lines
+            .next_line()
+            .await?
+            .ok_or(ProtocolError::Malformed("Empty line"))?;
+        StreamCommand::parse(line.trim())
+    }
+    .await;
+
+    match result {
+        Ok(command) => {
+            writer.write_all(&Response::Ok.as_bytes()).await?;
+            tokio::spawn(async move {
+                if let Err(e) =
+                    stream_udp(command.ticker, command.udp_addr).await
+                {
+                    tracing::error!("udp stream error for {peer}: {e}");
+                }
+            });
         }
-    });
-    // TCP connection closes here; UDP stream continues independently.
+        Err(e) => {
+            let res = Response::Err(e.to_string());
+            tracing::error!("error in connection: {res}");
+            writer.write_all(&res.as_bytes()).await?;
+        }
+    }
+
     Ok(())
 }
 
