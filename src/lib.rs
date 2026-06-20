@@ -1,6 +1,7 @@
 use std::{
     net::AddrParseError,
     num::{ParseFloatError, ParseIntError},
+    time::Duration,
 };
 
 use thiserror::Error;
@@ -11,6 +12,7 @@ pub mod quote;
 pub mod tickers;
 
 pub(crate) type QuoteResult<T> = Result<T, QuoteError>;
+pub const PING_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Error)]
 pub enum QuoteError {

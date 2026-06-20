@@ -1,10 +1,15 @@
-use std::net::SocketAddr;
-use std::time::Duration;
-use streaming_quotes::ProtocolError;
-use streaming_quotes::protocol::{Response, StreamCommand};
-use streaming_quotes::quote::StockQuote;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{TcpListener, TcpStream, UdpSocket};
+use std::{net::SocketAddr, time::Duration};
+use streaming_quotes::{
+    PING_TIMEOUT, ProtocolError,
+    protocol::{Response, StreamCommand},
+    quote::StockQuote,
+};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    net::{TcpListener, TcpStream, UdpSocket},
+    select,
+    time::{Instant, sleep, sleep_until},
+};
 
 const TCP_PORT: u16 = 7777;
 const UDP_INTERVAL_MS: u64 = 200;
@@ -61,14 +66,27 @@ async fn handle_connection(
 async fn stream_udp(
     ticker: String,
     udp_addr: SocketAddr,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(), ProtocolError> {
     let socket = UdpSocket::bind("0.0.0.0:0").await?;
-    println!("streaming {ticker} → {udp_addr}");
+    tracing::info!("streaming {ticker} → {udp_addr}");
+    let mut buf = vec![0u8; 2048];
+    let mut last_ping = Instant::now();
 
     loop {
-        let quote = StockQuote::generate(&ticker);
-        let line = quote.to_wire_line();
-        socket.send_to(line.as_bytes(), udp_addr).await?;
-        tokio::time::sleep(Duration::from_millis(UDP_INTERVAL_MS)).await;
+        select! {
+            _ = sleep(Duration::from_millis(UDP_INTERVAL_MS)) => {
+                let quote = StockQuote::generate(&ticker);
+                let line = quote.to_wire_line();
+                socket.send_to(line.as_bytes(), udp_addr).await?;
+            }
+            _ = sleep_until(last_ping + PING_TIMEOUT) => {
+                    return Ok(());
+                }
+            Ok((len, _from)) = socket.recv_from(&mut buf) => {
+                if std::str::from_utf8(&buf[..len]).is_ok_and(|msg| msg == "PING") {
+                   last_ping = Instant::now()
+               }
+            }
+        }
     }
 }

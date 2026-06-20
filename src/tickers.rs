@@ -8,6 +8,7 @@ pub static REGISTRY: LazyLock<Arc<TickerRegistry>> =
 
 impl TickerRegistry {
     const TICKERS_FILE: &str = "assets/tickers.txt";
+
     fn load() -> Self {
         let content = std::fs::read_to_string(Self::TICKERS_FILE)
             .expect("cannot read tickers file");
