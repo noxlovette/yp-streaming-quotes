@@ -14,22 +14,6 @@ pub enum Response {
     Err(String),
 }
 
-pub trait IntoResponse {
-    fn into_response(self) -> Response;
-}
-
-impl<T, E> IntoResponse for Result<T, E>
-where
-    T: IntoResponse,
-    E: IntoResponse,
-{
-    fn into_response(self) -> Response {
-        match self {
-            Result::Ok(t) => t.into_response(),
-            Result::Err(e) => e.into_response(),
-        }
-    }
-}
 impl Response {
     pub fn as_bytes(&self) -> Vec<u8> {
         match self {
@@ -68,13 +52,11 @@ impl StreamCommand {
             .to_string();
 
         if !REGISTRY.validate(&ticker) {
-            return Err(ProtocolError::UnknownCommand(ticker.to_string()));
+            return Err(ProtocolError::UnknownTicker(ticker.to_string()));
         };
 
         let ip = tokens.next().ok_or(ProtocolError::InvalidArguments)?;
-
         let port = tokens.next().ok_or(ProtocolError::InvalidArguments)?;
-
         if tokens.next().is_some() {
             return Err(ProtocolError::InvalidArguments); // too many tokens
         }

@@ -16,13 +16,15 @@ const UDP_INTERVAL_MS: u64 = 200;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let addr = format!("0.0.0.0:{TCP_PORT}");
+    tracing_subscriber::fmt().init();
+
+    let addr = format!("127.0.0.1:{TCP_PORT}");
     let listener = TcpListener::bind(&addr).await?;
     tracing::info!("TCP server listening on {addr}");
 
     loop {
         let (stream, peer) = listener.accept().await?;
-        println!("connection from {peer}");
+        tracing::info!("connection from {peer}");
         tokio::spawn(handle_connection(stream, peer));
     }
 }
@@ -67,7 +69,7 @@ async fn stream_udp(
     ticker: String,
     udp_addr: SocketAddr,
 ) -> Result<(), ProtocolError> {
-    let socket = UdpSocket::bind("0.0.0.0:0").await?;
+    let socket = UdpSocket::bind("127.0.0.1:0").await?;
     tracing::info!("streaming {ticker} → {udp_addr}");
     let mut buf = vec![0u8; 2048];
     let mut last_ping = Instant::now();
