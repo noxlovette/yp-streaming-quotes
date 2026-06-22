@@ -1,11 +1,11 @@
 use crate::{ProtocolError, tickers::REGISTRY};
-use std::{fmt, net::SocketAddr};
+use std::{fmt, net::SocketAddr, str::FromStr};
 
-/// The parsed form of a `STREAM <ticker> <ip> <port>\n` line.
+/// The parsed form of a `STREAM <ip:port> <TICKER1,TICKER2,...>\n` line.
 #[derive(Debug)]
 pub struct StreamCommand {
-    pub ticker: String,
     pub udp_addr: SocketAddr,
+    pub tickers: Vec<String>,
 }
 
 /// Server → client response.
@@ -26,44 +26,46 @@ impl Response {
 impl fmt::Display for Response {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Response::Ok => f.write_str("OK\n"),
-            Response::Err(reason) => write!(f, "ERR {reason}\n"),
+            Response::Ok => f.write_str("OK"),
+            Response::Err(reason) => write!(f, "ERR {reason}"),
         }
     }
 }
 
 impl StreamCommand {
-    /// Parse a raw line (without the trailing `\n`) into a StreamCommand.
+    /// Parse a raw line (without trailing `\n`) into a StreamCommand.
     ///
-    /// Expected format: `STREAM <TICKER> <IP> <PORT>`
+    /// Expected format: `STREAM <ip:port> <TICKER1,TICKER2,...>`
     ///
-    /// Returns `ProtocolError` on any malformed input.
+    /// Error mapping:
+    ///   wrong/missing verb      → ProtocolError::InvalidCommand
+    ///   unparseable ip:port     → ProtocolError::InvalidAddr
+    ///   missing or empty tickers → ProtocolError::EmptyTickerList
+    ///   ticker not in registry  → ProtocolError::UnknownTicker
     pub fn parse(line: &str) -> Result<Self, ProtocolError> {
         let mut tokens = line.split_whitespace();
 
-        match tokens.next() {
-            Some("STREAM") => {}
-            _ => return Err(ProtocolError::UnknownCommand(line.to_string())),
+        if !tokens.next().is_some_and(|t| t == "STREAM") {
+            return Err(ProtocolError::InvalidCommand);
         }
 
-        let ticker = tokens
-            .next()
-            .ok_or(ProtocolError::InvalidArguments)?
-            .to_string();
+        let udp_addr = SocketAddr::from_str(tokens.next().unwrap_or_default())
+            .map_err(|_| ProtocolError::InvalidAddr)?;
 
-        if !REGISTRY.validate(&ticker) {
-            return Err(ProtocolError::UnknownTicker(ticker.to_string()));
-        };
+        let mut tickers = Vec::new();
 
-        let ip = tokens.next().ok_or(ProtocolError::InvalidArguments)?;
-        let port = tokens.next().ok_or(ProtocolError::InvalidArguments)?;
-        if tokens.next().is_some() {
-            return Err(ProtocolError::InvalidArguments); // too many tokens
+        for ticker in tokens.next().unwrap_or_default().split(',') {
+            if REGISTRY.validate(&ticker) {
+                tickers.push(ticker.to_string());
+            } else {
+                return Err(ProtocolError::UnknownTicker(ticker.to_string()));
+            }
         }
 
-        Ok(StreamCommand {
-            ticker,
-            udp_addr: format!("{}:{}", ip, port).parse()?,
-        })
+        if tickers.is_empty() {
+            return Err(ProtocolError::EmptyTickerList);
+        }
+
+        Ok(Self { udp_addr, tickers })
     }
 }

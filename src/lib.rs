@@ -1,11 +1,10 @@
 use std::{
-    net::AddrParseError,
+    io,
     num::{ParseFloatError, ParseIntError},
     time::Duration,
 };
 
 use thiserror::Error;
-use tokio::io;
 
 pub mod protocol;
 pub mod quote;
@@ -31,21 +30,18 @@ pub enum QuoteError {
 
 #[derive(Debug, Error)]
 pub enum ProtocolError {
-    #[error("malformed command: {0}")]
-    Malformed(&'static str),
+    #[error("invalid command")]
+    InvalidCommand,
 
-    #[error("unknown command: {0}")]
-    UnknownCommand(String),
+    #[error("invalid udp address")]
+    InvalidAddr,
+
+    #[error("empty ticker list")]
+    EmptyTickerList,
 
     #[error("unknown ticker: {0}")]
     UnknownTicker(String),
 
-    #[error("IO Error: {0}")]
+    #[error("IO error: {0}")]
     Io(#[from] io::Error),
-
-    #[error("invalid addr: {0}")]
-    InvalidAddr(#[from] AddrParseError),
-
-    #[error("invalid arguments")]
-    InvalidArguments,
 }
