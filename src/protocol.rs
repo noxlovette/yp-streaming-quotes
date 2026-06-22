@@ -53,10 +53,12 @@ impl StreamCommand {
         let udp_addr = SocketAddr::from_str(tokens.next().unwrap_or_default())
             .map_err(|_| ProtocolError::InvalidAddr)?;
 
+        let ticker_token = tokens.next().ok_or(ProtocolError::EmptyTickerList)?;
+
         let mut tickers = HashSet::new();
 
-        for ticker in tokens.next().unwrap_or_default().split(',') {
-            if REGISTRY.validate(&ticker) {
+        for ticker in ticker_token.split(',') {
+            if REGISTRY.validate(ticker) {
                 tickers.insert(ticker.to_string());
             } else {
                 return Err(ProtocolError::UnknownTicker(ticker.to_string()));
@@ -90,5 +92,69 @@ impl Display for StreamCommand {
             write!(f, "{value}")?;
         }
         writeln!(f)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_valid_stream_command() {
+        let cmd = StreamCommand::parse("STREAM 127.0.0.1:9000 AAPL,MSFT").unwrap();
+        assert_eq!(cmd.udp_addr, "127.0.0.1:9000".parse().unwrap());
+        assert!(cmd.tickers.contains("AAPL"));
+        assert!(cmd.tickers.contains("MSFT"));
+    }
+
+    #[test]
+    fn single_ticker_is_accepted() {
+        let cmd = StreamCommand::parse("STREAM 0.0.0.0:4000 NVDA").unwrap();
+        assert_eq!(cmd.tickers.len(), 1);
+        assert!(cmd.tickers.contains("NVDA"));
+    }
+
+    #[test]
+    fn duplicate_tickers_are_deduped() {
+        let cmd = StreamCommand::parse("STREAM 127.0.0.1:9000 AAPL,AAPL").unwrap();
+        assert_eq!(cmd.tickers.len(), 1);
+    }
+
+    #[test]
+    fn wrong_command_keyword_returns_invalid_command() {
+        let err = StreamCommand::parse("SUBSCRIBE 127.0.0.1:9000 AAPL").unwrap_err();
+        assert!(matches!(err, ProtocolError::InvalidCommand));
+    }
+
+    #[test]
+    fn missing_command_keyword_returns_invalid_command() {
+        let err = StreamCommand::parse("").unwrap_err();
+        assert!(matches!(err, ProtocolError::InvalidCommand));
+    }
+
+    #[test]
+    fn bad_address_returns_invalid_addr() {
+        let err = StreamCommand::parse("STREAM not-an-addr AAPL").unwrap_err();
+        assert!(matches!(err, ProtocolError::InvalidAddr));
+    }
+
+    #[test]
+    fn missing_address_returns_invalid_addr() {
+        let err = StreamCommand::parse("STREAM").unwrap_err();
+        assert!(matches!(err, ProtocolError::InvalidAddr));
+    }
+
+    #[test]
+    fn empty_ticker_list_returns_empty_ticker_list_error() {
+        // valid address, but no tickers token at all
+        let err = StreamCommand::parse("STREAM 127.0.0.1:9000").unwrap_err();
+        assert!(matches!(err, ProtocolError::EmptyTickerList));
+    }
+
+    #[test]
+    fn unknown_ticker_returns_error() {
+        let err =
+            StreamCommand::parse("STREAM 127.0.0.1:9000 AAPL,FAKEXYZ").unwrap_err();
+        assert!(matches!(err, ProtocolError::UnknownTicker(_)));
     }
 }
