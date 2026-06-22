@@ -1,18 +1,20 @@
 use clap::Parser;
-use std::{fs, net::SocketAddr, str::from_utf8, sync::Arc};
-use streaming_quotes::quote::StockQuote;
-use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    net::{TcpStream, UdpSocket},
-    sync::watch,
+use std::{
+    fs,
+    io::{self, BufRead, BufReader, Write},
+    net::{SocketAddr, TcpStream, UdpSocket},
+    str::from_utf8,
 };
-use tracing::{error, info, warn};
+use streaming_quotes::{
+    PING_INTERVAL, PING_TIMEOUT, protocol::StreamCommand, quote::StockQuote,
+};
+use tracing::{info, warn};
 
 #[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
+#[command(version, about)]
 struct Args {
-    #[arg(short, long)]
-    addr: String,
+    #[arg(short, long, default_value = "127.0.0.1:7878")]
+    server: String,
 
     #[arg(short, long)]
     udp_port: u16,
@@ -20,57 +22,83 @@ struct Args {
     path: String,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt().init();
+fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt::init();
 
     let args = Args::parse();
 
     let tickers = read_tickers(&args.path);
+
     if tickers.is_empty() {
         anyhow::bail!("no tickers found in {}", args.path);
     }
-    info!("loaded {} tickers from {}", tickers.len(), args.path);
 
-    let socket = Arc::new(
-        UdpSocket::bind(format!("127.0.0.1:{}", args.udp_port)).await?,
-    );
+    info!("loaded {} tickers: {:?}", tickers.len(), tickers);
 
-    info!("UDP socket bound on port {}", args.udp_port);
+    let udp = UdpSocket::bind(format!("0.0.0.0:{}", args.udp_port))?;
 
-    let (tx, rx) = watch::channel(None::<SocketAddr>);
+    udp.set_read_timeout(Some(PING_TIMEOUT))?;
 
-    for ticker in &tickers {
-        match register_ticker(&args.addr, ticker, "127.0.0.1", args.udp_port)
-            .await
-        {
-            Ok(()) => info!("registered {ticker} with server"),
-            Err(e) => warn!("skipping {ticker}: {e}"),
-        }
+    info!("UDP listening on :{}", args.udp_port);
+
+    let tcp = TcpStream::connect(&args.server)?;
+    (&tcp).write_all(
+        StreamCommand::construct(tickers, args.udp_port)
+            .as_string()
+            .as_bytes(),
+    )?;
+
+    // read the response
+    let mut resp = String::new();
+    BufReader::new(&tcp).read_line(&mut resp)?;
+
+    let resp = resp.trim();
+    if resp != "OK" {
+        anyhow::bail!("server rejected: {resp}");
     }
+    info!("streaming {ticker_list}");
+    drop(tcp);
 
-    let ping_handle = tokio::spawn(ping_task(Arc::clone(&socket), rx));
-
+    let mut server_udp: Option<SocketAddr> = None;
     let mut buf = vec![0u8; 2048];
+
     loop {
-        tokio::select! {
-            result = socket.recv_from(&mut buf) => {
-                let (len, from) = result?;
-                let _ = tx.send(Some(from));
-                match StockQuote::from_wire_line(from_utf8(&buf[..len])?) {
-                    Ok(quote) => info!("quote from {from}: {quote:?}"),
-                    Err(e) => error!("bad quote from {from}: {e}"),
+        match udp.recv_from(&mut buf) {
+            Ok((len, from)) => {
+                server_udp.get_or_insert(from);
+
+                let text = match from_utf8(&buf[..len]) {
+                    Ok(s) => s.trim_end_matches('\n'),
+                    Err(_) => {
+                        warn!("non-UTF8 datagram from {from}");
+                        continue;
+                    }
+                };
+
+                match StockQuote::from_wire_line(text) {
+                    Ok(q) => info!(
+                        "[{}] ${:.2}  vol={}  ts={}",
+                        q.ticker, q.price, q.volume, q.timestamp_ms
+                    ),
+                    Err(e) => warn!("bad datagram from {from}: {e} ({text:?})"),
                 }
             }
-            _ = tokio::signal::ctrl_c() => {
-                info!("shutting down");
-                break;
+
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) =>
+            {
+                if let Some(addr) = server_udp {
+                    udp.send_to(b"PING\n", addr)?;
+                    info!("PING → {addr}");
+                }
             }
+
+            Err(e) => return Err(e.into()),
         }
     }
-
-    ping_handle.abort();
-    Ok(())
 }
 
 fn read_tickers(path: &str) -> Vec<String> {
@@ -81,38 +109,4 @@ fn read_tickers(path: &str) -> Vec<String> {
         .filter(|s| !s.is_empty())
         .map(str::to_string)
         .collect()
-}
-
-async fn register_ticker(
-    server_addr: &str,
-    ticker: &str,
-    ip: &str,
-    udp_port: u16,
-) -> anyhow::Result<()> {
-    let mut stream = TcpStream::connect(server_addr).await?;
-    let cmd = format!("STREAM {ticker} {ip} {udp_port}\n");
-    let (reader, mut writer) = stream.split();
-    writer.write_all(cmd.as_bytes()).await?;
-
-    let mut resp = String::new();
-    BufReader::new(reader).read_line(&mut resp).await?;
-
-    if resp.trim() != "OK" {
-        anyhow::bail!("{}", resp.trim());
-    }
-    Ok(())
-}
-
-async fn ping_task(
-    socket: Arc<UdpSocket>,
-    rx: watch::Receiver<Option<SocketAddr>>,
-) {
-    loop {
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-        let addr = *rx.borrow();
-        if let Some(addr) = addr {
-            tracing::debug!("PING → {addr}");
-            let _ = socket.send_to(b"PING", addr).await;
-        }
-    }
 }

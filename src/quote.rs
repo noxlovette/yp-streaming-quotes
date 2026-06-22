@@ -1,16 +1,41 @@
 use crate::{QuoteError, QuoteResult};
 use rand::RngExt;
 use std::{
+    fmt::Display,
+    hash::{Hash, Hasher},
     str::FromStr,
     time::{SystemTime, UNIX_EPOCH},
 };
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct StockQuote {
     pub ticker: String,
     pub price: f64,
     pub volume: u32,
     pub timestamp_ms: u64,
+}
+
+impl Display for StockQuote {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "STOCK QUOTE")?;
+        writeln!(f, "{}", self.ticker)?;
+        writeln!(f, "{}", self.price)
+    }
+}
+
+impl PartialEq for StockQuote {
+    fn eq(&self, other: &Self) -> bool {
+        self.ticker == other.ticker && self.timestamp_ms == other.timestamp_ms
+    }
+}
+
+impl Eq for StockQuote {}
+
+impl Hash for StockQuote {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.ticker.hash(state);
+        self.timestamp_ms.hash(state);
+    }
 }
 
 #[derive(Debug, Default)]
@@ -79,7 +104,8 @@ impl StockQuote {
 
     pub fn generate(ticker: &str) -> Self {
         let mut rng = rand::rng();
-        let price = ((rng.random::<f64>() * 490.0 + 10.0) * 100.0).round() / 100.0;
+        let price =
+            ((rng.random::<f64>() * 490.0 + 10.0) * 100.0).round() / 100.0;
         let volume = rng.random_range(100u32..=10_000_000u32);
         let timestamp_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)

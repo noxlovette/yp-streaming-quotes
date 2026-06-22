@@ -1,11 +1,18 @@
 use crate::{ProtocolError, tickers::REGISTRY};
-use std::{fmt, net::SocketAddr, str::FromStr};
+use std::{
+    collections::HashSet,
+    fmt::{self, Display},
+    net::SocketAddr,
+    str::FromStr,
+};
 
 /// The parsed form of a `STREAM <ip:port> <TICKER1,TICKER2,...>\n` line.
+///
+/// All tickers are validated and deduped
 #[derive(Debug)]
 pub struct StreamCommand {
     pub udp_addr: SocketAddr,
-    pub tickers: Vec<String>,
+    pub tickers: HashSet<String>,
 }
 
 /// Server → client response.
@@ -36,12 +43,6 @@ impl StreamCommand {
     /// Parse a raw line (without trailing `\n`) into a StreamCommand.
     ///
     /// Expected format: `STREAM <ip:port> <TICKER1,TICKER2,...>`
-    ///
-    /// Error mapping:
-    ///   wrong/missing verb      → ProtocolError::InvalidCommand
-    ///   unparseable ip:port     → ProtocolError::InvalidAddr
-    ///   missing or empty tickers → ProtocolError::EmptyTickerList
-    ///   ticker not in registry  → ProtocolError::UnknownTicker
     pub fn parse(line: &str) -> Result<Self, ProtocolError> {
         let mut tokens = line.split_whitespace();
 
@@ -52,11 +53,11 @@ impl StreamCommand {
         let udp_addr = SocketAddr::from_str(tokens.next().unwrap_or_default())
             .map_err(|_| ProtocolError::InvalidAddr)?;
 
-        let mut tickers = Vec::new();
+        let mut tickers = HashSet::new();
 
         for ticker in tokens.next().unwrap_or_default().split(',') {
             if REGISTRY.validate(&ticker) {
-                tickers.push(ticker.to_string());
+                tickers.insert(ticker.to_string());
             } else {
                 return Err(ProtocolError::UnknownTicker(ticker.to_string()));
             }
@@ -67,5 +68,26 @@ impl StreamCommand {
         }
 
         Ok(Self { udp_addr, tickers })
+    }
+
+    pub fn construct(
+        tickers: Vec<String>,
+        udp_port: u16,
+    ) -> Result<Self, ProtocolError> {
+        let ticker_list = tickers.join(",");
+        let local_udp = format!("127.0.0.1:{}", udp_port);
+
+        format!("STREAM {local_udp} {ticker_list}\n");
+
+        Ok(Self {
+            udp_addr: (),
+            tickers: (),
+        })
+    }
+}
+
+impl Display for StreamCommand {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        todo!()
     }
 }

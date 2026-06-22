@@ -2,24 +2,16 @@ use std::{
     collections::HashSet,
     io::{BufRead, BufReader, Write},
     net::{SocketAddr, TcpListener, TcpStream, UdpSocket},
-    sync::mpsc,
-    thread,
+    sync::mpsc::{self, channel},
+    thread::{self},
     time::Duration,
 };
 use streaming_quotes::{
-    PING_TIMEOUT, ProtocolError,
+    Generator, Subscriber, TCP_PORT,
     protocol::{Response, StreamCommand},
     quote::StockQuote,
 };
-use tracing::{error, info, warn};
-
-const TCP_PORT: u16 = 7878;
-const QUOTE_INTERVAL: Duration = Duration::from_secs(1);
-
-struct Subscriber {
-    tickers: Vec<String>,
-    sender: mpsc::Sender<StockQuote>,
-}
+use tracing::{error, info};
 
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
@@ -28,16 +20,20 @@ fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(&addr)?;
     info!("TCP server listening on {addr}");
 
-    let (new_sub_tx, new_sub_rx) = mpsc::channel::<Subscriber>();
-    thread::spawn(move || run_generator(new_sub_rx));
+    let (generator, tx) = Generator::new();
 
+    generator.run();
+
+    // accept incoming connections
     for incoming in listener.incoming() {
         match incoming {
+            // got the connection
             Ok(stream) => {
-                let peer = stream.peer_addr().unwrap();
-                let sub_tx = new_sub_tx.clone();
+                let peer = stream.peer_addr()?;
+                let new_tx = tx.clone();
+
                 thread::spawn(move || {
-                    if let Err(e) = handle_connection(stream, peer, sub_tx) {
+                    if let Err(e) = handle_connection(stream, peer, new_tx) {
                         error!("connection error from {peer}: {e}");
                     }
                 });
@@ -45,17 +41,21 @@ fn main() -> anyhow::Result<()> {
             Err(e) => error!("accept error: {e}"),
         }
     }
+
     Ok(())
 }
 
+/// Informs the generator about new subscribers
 fn handle_connection(
     stream: TcpStream,
     peer: SocketAddr,
-    new_sub_tx: mpsc::Sender<Subscriber>,
-) -> Result<(), ProtocolError> {
+    new_tx: mpsc::Sender<Subscriber>,
+) -> anyhow::Result<()> {
     let mut line = String::new();
+    // read what we're getting
     BufReader::new(&stream).read_line(&mut line)?;
 
+    // parse the line
     match StreamCommand::parse(line.trim()) {
         Ok(command) => {
             (&stream).write_all(&Response::Ok.as_bytes())?;
@@ -64,17 +64,19 @@ fn handle_connection(
                 command.tickers, command.udp_addr
             );
 
-            let (quote_tx, quote_rx) = mpsc::channel::<StockQuote>();
+            let (sub_tx, sub_rx) = channel();
+            let new_sub = Subscriber::new(command.tickers, sub_tx);
 
-            // Register with the generator before spawning the sender thread
-            new_sub_tx
-                .send(Subscriber {
-                    tickers: command.tickers,
-                    sender: quote_tx,
-                })
-                .ok();
+            match new_tx.send(new_sub) {
+                Ok(_) => {
+                    info!("new subscriber sent to the generator")
+                }
+                Err(_) => {
+                    error!("error sending subscriber to the generator")
+                }
+            };
 
-            thread::spawn(move || run_udp_sender(quote_rx, command.udp_addr));
+            thread::spawn(move || run_udp_sender(sub_rx, command.udp_addr));
         }
         Err(e) => {
             let res = Response::Err(e.to_string());
@@ -85,41 +87,11 @@ fn handle_connection(
     Ok(())
 }
 
-fn run_generator(new_sub_rx: mpsc::Receiver<Subscriber>) {
-    let mut subscribers: Vec<Subscriber> = Vec::new();
-
-    loop {
-        // Drain newly registered subscribers before each tick
-        while let Ok(sub) = new_sub_rx.try_recv() {
-            info!("generator: new subscriber for {:?}", sub.tickers);
-            subscribers.push(sub);
-        }
-
-        // Union of all tickers across active subscribers
-        let tickers: HashSet<String> = subscribers
-            .iter()
-            .flat_map(|s| s.tickers.iter().cloned())
-            .collect();
-
-        for ticker in &tickers {
-            let quote = StockQuote::generate(ticker);
-            // Fan out: send to every subscriber that wants this ticker.
-            // retain drops the subscriber if its channel is closed (client gone).
-            subscribers.retain(|sub| {
-                if sub.tickers.contains(ticker) {
-                    sub.sender.send(quote.clone()).is_ok()
-                } else {
-                    true
-                }
-            });
-        }
-
-        thread::sleep(QUOTE_INTERVAL);
-    }
-}
-
-fn run_udp_sender(rx: mpsc::Receiver<StockQuote>, udp_addr: SocketAddr) {
-    let socket = match UdpSocket::bind("0.0.0.0:0") {
+fn run_udp_sender(
+    rx: mpsc::Receiver<HashSet<StockQuote>>,
+    udp_addr: SocketAddr,
+) {
+    let socket = match UdpSocket::bind(udp_addr) {
         Ok(s) => s,
         Err(e) => {
             error!("UDP bind for {udp_addr} failed: {e}");
@@ -127,22 +99,24 @@ fn run_udp_sender(rx: mpsc::Receiver<StockQuote>, udp_addr: SocketAddr) {
         }
     };
 
-    loop {
-        match rx.recv_timeout(PING_TIMEOUT) {
-            Ok(quote) => {
-                let payload = format!("{}\n", quote.to_wire_line());
-                if let Err(e) = socket.send_to(payload.as_bytes(), udp_addr) {
-                    warn!("UDP send to {udp_addr} failed: {e}");
-                    break;
+    // auto-closes thread after generator dies
+    match rx.recv_timeout(Duration::from_secs(1)) {
+        Ok(s) => {
+            for quote in s {
+                match socket.send(quote.to_wire_line().as_bytes()) {
+                    Ok(sent) => {
+                        tracing::debug!("sent {sent} bytes to destination")
+                    }
+                    Err(e) => {
+                        error!(
+                            "error sending quote {quote} to address {udp_addr}; Error: {e}"
+                        )
+                    }
                 }
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                if let Err(e) = socket.send_to(b"PING\n", udp_addr) {
-                    warn!("UDP PING to {udp_addr} failed: {e}");
-                    break;
-                }
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        Err(e) => {
+            error!("sender hung up: {e}")
         }
     }
 
