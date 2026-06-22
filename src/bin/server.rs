@@ -1,13 +1,13 @@
 use std::{
     collections::HashSet,
-    io::{BufRead, BufReader, Write},
+    io::{self, BufRead, BufReader, Write},
     net::{SocketAddr, TcpListener, TcpStream, UdpSocket},
-    sync::mpsc::{self, channel},
+    sync::mpsc::{self, channel, TryRecvError},
     thread::{self},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use streaming_quotes::{
-    Generator, Subscriber, TCP_PORT,
+    Generator, PING_TIMEOUT, Subscriber, TCP_PORT,
     protocol::{Response, StreamCommand},
     quote::StockQuote,
 };
@@ -91,32 +91,63 @@ fn run_udp_sender(
     rx: mpsc::Receiver<HashSet<StockQuote>>,
     udp_addr: SocketAddr,
 ) {
-    let socket = match UdpSocket::bind(udp_addr) {
+    let socket = match UdpSocket::bind("0.0.0.0:0") {
         Ok(s) => s,
         Err(e) => {
-            error!("UDP bind for {udp_addr} failed: {e}");
+            error!("UDP bind failed: {e}");
             return;
         }
     };
 
-    // auto-closes thread after generator dies
-    match rx.recv_timeout(Duration::from_secs(1)) {
-        Ok(s) => {
-            for quote in s {
-                match socket.send(quote.to_wire_line().as_bytes()) {
-                    Ok(sent) => {
-                        tracing::debug!("sent {sent} bytes to destination")
-                    }
-                    Err(e) => {
-                        error!(
-                            "error sending quote {quote} to address {udp_addr}; Error: {e}"
-                        )
+    if let Err(e) = socket.set_read_timeout(Some(Duration::from_millis(100))) {
+        error!("set_read_timeout failed: {e}");
+        return;
+    }
+
+    // None until the first quote packet is sent — the client can't PING us until
+    // it learns our ephemeral UDP port from that first packet.
+    let mut last_ping: Option<Instant> = None;
+    let mut buf = [0u8; 64];
+
+    loop {
+        // Poll for keepalive PINGs from the client.
+        match socket.recv_from(&mut buf) {
+            Ok(_) => {
+                last_ping = Some(Instant::now());
+            }
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) =>
+            {
+                if last_ping.is_some_and(|t| t.elapsed() > PING_TIMEOUT) {
+                    info!("client {udp_addr} timed out, closing UDP sender");
+                    break;
+                }
+            }
+            Err(e) => {
+                error!("UDP recv error for {udp_addr}: {e}");
+                break;
+            }
+        }
+
+        // Drain any quotes the generator has ready.
+        match rx.try_recv() {
+            Ok(quotes) => {
+                for quote in quotes {
+                    match socket.send_to(quote.to_wire_line().as_bytes(), udp_addr) {
+                        Ok(sent) => {
+                            tracing::debug!("sent {sent} bytes to {udp_addr}");
+                            // First successful send: start the ping clock.
+                            last_ping.get_or_insert_with(Instant::now);
+                        }
+                        Err(e) => error!("error sending quote {quote} to {udp_addr}: {e}"),
                     }
                 }
             }
-        }
-        Err(e) => {
-            error!("sender hung up: {e}")
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => break,
         }
     }
 

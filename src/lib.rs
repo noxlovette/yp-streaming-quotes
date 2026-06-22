@@ -8,7 +8,6 @@ use std::{
 
 use crate::quote::StockQuote;
 use thiserror::Error;
-use tracing::error;
 
 pub mod protocol;
 pub mod quote;
@@ -59,13 +58,8 @@ impl Generator {
         thread::spawn(move || {
             loop {
                 // check if there are any new subs pending
-                match self.rx.try_recv() {
-                    Ok(s) => {
-                        self.add_subscriber(s);
-                    }
-                    Err(e) => {
-                        error!("error receiving new subscriber: {e}")
-                    }
+                while let Ok(s) = self.rx.try_recv() {
+                    self.add_subscriber(s);
                 }
 
                 let mut out = HashSet::new();
@@ -75,21 +69,22 @@ impl Generator {
                     out.insert(StockQuote::generate(t));
                 }
 
-                // notify threads
-                for s in &self.subscribers {
+                // notify threads, removing any whose receiver has been dropped
+                self.subscribers.retain(|s| {
                     let to_send: HashSet<StockQuote> = out
-                        .clone()
-                        .into_iter()
+                        .iter()
                         .filter(|q| s.tickers.contains(&q.ticker))
+                        .cloned()
                         .collect();
+                    s.tx.send(to_send).is_ok()
+                });
 
-                    match s.tx.send(to_send) {
-                        Ok(_) => {}
-                        Err(e) => {
-                            error!("error sending stock quotes to threads: {e}")
-                        }
-                    }
-                }
+                // rebuild ticker filter if any subscribers were removed
+                self.filter = self
+                    .subscribers
+                    .iter()
+                    .flat_map(|s| s.tickers.iter().cloned())
+                    .collect();
 
                 thread::sleep(QUOTE_INTERVAL);
             }

@@ -70,24 +70,25 @@ impl StreamCommand {
         Ok(Self { udp_addr, tickers })
     }
 
-    pub fn construct(
-        tickers: Vec<String>,
-        udp_port: u16,
-    ) -> Result<Self, ProtocolError> {
-        let ticker_list = tickers.join(",");
-        let local_udp = format!("127.0.0.1:{}", udp_port);
-
-        format!("STREAM {local_udp} {ticker_list}\n");
-
-        Ok(Self {
-            udp_addr: (),
-            tickers: (),
-        })
+    pub fn construct(tickers: Vec<String>, udp_addr: SocketAddr) -> Self {
+        Self {
+            udp_addr,
+            tickers: tickers.into_iter().collect(),
+        }
     }
 }
 
 impl Display for StreamCommand {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        todo!()
+        write!(f, "STREAM {} ", self.udp_addr)?;
+        let mut first = true;
+        for value in &self.tickers {
+            if !first {
+                write!(f, ",")?;
+            }
+            first = false;
+            write!(f, "{value}")?;
+        }
+        writeln!(f)
     }
 }

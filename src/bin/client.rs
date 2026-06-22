@@ -6,7 +6,7 @@ use std::{
     str::from_utf8,
 };
 use streaming_quotes::{
-    PING_INTERVAL, PING_TIMEOUT, protocol::StreamCommand, quote::StockQuote,
+    PING_TIMEOUT, protocol::StreamCommand, quote::StockQuote,
 };
 use tracing::{info, warn};
 
@@ -23,40 +23,39 @@ struct Args {
 }
 
 fn main() -> anyhow::Result<()> {
+    // machinery
     tracing_subscriber::fmt::init();
-
     let args = Args::parse();
 
+    // ticker init
     let tickers = read_tickers(&args.path);
-
     if tickers.is_empty() {
         anyhow::bail!("no tickers found in {}", args.path);
     }
 
     info!("loaded {} tickers: {:?}", tickers.len(), tickers);
 
-    let udp = UdpSocket::bind(format!("0.0.0.0:{}", args.udp_port))?;
-
+    // set up UDP
+    let udp = UdpSocket::bind(format!("127.0.0.1:{}", args.udp_port))?;
     udp.set_read_timeout(Some(PING_TIMEOUT))?;
 
     info!("UDP listening on :{}", args.udp_port);
 
+    // notify the server
     let tcp = TcpStream::connect(&args.server)?;
     (&tcp).write_all(
-        StreamCommand::construct(tickers, args.udp_port)
-            .as_string()
+        StreamCommand::construct(tickers, udp.local_addr()?)
+            .to_string()
             .as_bytes(),
     )?;
 
     // read the response
     let mut resp = String::new();
     BufReader::new(&tcp).read_line(&mut resp)?;
-
     let resp = resp.trim();
     if resp != "OK" {
         anyhow::bail!("server rejected: {resp}");
     }
-    info!("streaming {ticker_list}");
     drop(tcp);
 
     let mut server_udp: Option<SocketAddr> = None;
