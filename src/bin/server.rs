@@ -2,7 +2,7 @@ use std::{
     collections::HashSet,
     io::{self, BufRead, BufReader, Write},
     net::{SocketAddr, TcpListener, TcpStream, UdpSocket},
-    sync::mpsc::{self, channel, TryRecvError},
+    sync::mpsc::{self, TryRecvError, channel},
     thread::{self},
     time::{Duration, Instant},
 };
@@ -104,8 +104,8 @@ fn run_udp_sender(
         return;
     }
 
-    // None until the first quote packet is sent — the client can't PING us until
-    // it learns our ephemeral UDP port from that first packet.
+    // None until the first quote packet is sent — the client can't PING us
+    // until it learns our ephemeral UDP port from that first packet.
     let mut last_ping: Option<Instant> = None;
     let mut buf = [0u8; 64];
 
@@ -136,13 +136,17 @@ fn run_udp_sender(
         match rx.try_recv() {
             Ok(quotes) => {
                 for quote in quotes {
-                    match socket.send_to(quote.to_wire_line().as_bytes(), udp_addr) {
+                    match socket
+                        .send_to(quote.to_wire_line().as_bytes(), udp_addr)
+                    {
                         Ok(sent) => {
                             tracing::debug!("sent {sent} bytes to {udp_addr}");
                             // First successful send: start the ping clock.
                             last_ping.get_or_insert_with(Instant::now);
                         }
-                        Err(e) => error!("error sending quote {quote} to {udp_addr}: {e}"),
+                        Err(e) => error!(
+                            "error sending quote {quote} to {udp_addr}: {e}"
+                        ),
                     }
                 }
             }

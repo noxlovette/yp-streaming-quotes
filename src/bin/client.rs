@@ -1,12 +1,14 @@
 use clap::Parser;
 use std::{
     fs,
-    io::{self, BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Write},
     net::{SocketAddr, TcpStream, UdpSocket},
     str::from_utf8,
+    sync::mpsc::{Receiver, Sender, channel},
+    thread,
 };
 use streaming_quotes::{
-    PING_TIMEOUT, protocol::StreamCommand, quote::StockQuote,
+    PING_INTERVAL, PING_TIMEOUT, protocol::StreamCommand, quote::StockQuote,
 };
 use tracing::{info, warn};
 
@@ -58,6 +60,30 @@ fn main() -> anyhow::Result<()> {
     }
     drop(tcp);
 
+    let (tx, rx) = channel();
+
+    ping_thread(udp.try_clone()?, rx);
+    read_udp(udp, tx)
+}
+
+fn ping_thread(udp: UdpSocket, rx: Receiver<SocketAddr>) {
+    thread::spawn(move || {
+        let addr = match rx.recv() {
+            Ok(a) => a,
+            Err(_) => return,
+        };
+        loop {
+            if let Err(e) = udp.send_to(b"PING\n", addr) {
+                warn!("PING send failed: {e}");
+            } else {
+                info!("PING → {addr}");
+            }
+            thread::sleep(PING_INTERVAL);
+        }
+    });
+}
+
+fn read_udp(udp: UdpSocket, tx: Sender<SocketAddr>) -> anyhow::Result<()> {
     let mut server_udp: Option<SocketAddr> = None;
     let mut buf = vec![0u8; 2048];
 
@@ -65,6 +91,9 @@ fn main() -> anyhow::Result<()> {
         match udp.recv_from(&mut buf) {
             Ok((len, from)) => {
                 server_udp.get_or_insert(from);
+                if let Some(addr) = server_udp {
+                    tx.send(addr).ok();
+                }
 
                 let text = match from_utf8(&buf[..len]) {
                     Ok(s) => s.trim_end_matches('\n'),
@@ -75,23 +104,8 @@ fn main() -> anyhow::Result<()> {
                 };
 
                 match StockQuote::from_wire_line(text) {
-                    Ok(q) => info!(
-                        "[{}] ${:.2}  vol={}  ts={}",
-                        q.ticker, q.price, q.volume, q.timestamp_ms
-                    ),
+                    Ok(q) => info!("{q}"),
                     Err(e) => warn!("bad datagram from {from}: {e} ({text:?})"),
-                }
-            }
-
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                ) =>
-            {
-                if let Some(addr) = server_udp {
-                    udp.send_to(b"PING\n", addr)?;
-                    info!("PING → {addr}");
                 }
             }
 

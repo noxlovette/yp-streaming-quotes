@@ -17,9 +17,11 @@ pub struct StockQuote {
 
 impl Display for StockQuote {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "STOCK QUOTE")?;
-        writeln!(f, "{}", self.ticker)?;
-        writeln!(f, "{}", self.price)
+        writeln!(
+            f,
+            "[{}] ${:.2}  vol={}  ts={}",
+            self.ticker, self.price, self.volume, self.timestamp_ms
+        )
     }
 }
 

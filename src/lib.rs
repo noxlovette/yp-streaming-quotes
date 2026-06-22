@@ -40,7 +40,8 @@ pub struct Generator {
 }
 
 impl Generator {
-    /// Creates a new generator, returning self and the receiver handle for the channel
+    /// Creates a new generator, returning self and the receiver handle for the
+    /// channel
     pub fn new() -> (Self, Sender<Subscriber>) {
         let (tx, rx) = mpsc::channel();
         (
