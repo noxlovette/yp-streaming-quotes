@@ -15,13 +15,14 @@ use tracing::{info, warn};
 #[derive(Parser, Debug)]
 #[command(version, about)]
 struct Args {
-    #[arg(short, long, default_value = "127.0.0.1:7878")]
-    server: String,
+    #[arg(long, default_value = "127.0.0.1:7878")]
+    server_addr: String,
 
-    #[arg(short, long)]
+    #[arg(long)]
     udp_port: u16,
 
-    path: String,
+    #[arg(long)]
+    tickers_file: String,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -30,9 +31,9 @@ fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     // ticker init
-    let tickers = read_tickers(&args.path);
+    let tickers = read_tickers(&args.tickers_file);
     if tickers.is_empty() {
-        anyhow::bail!("no tickers found in {}", args.path);
+        anyhow::bail!("no tickers found in {}", args.tickers_file);
     }
 
     info!("loaded {} tickers: {:?}", tickers.len(), tickers);
@@ -44,7 +45,7 @@ fn main() -> anyhow::Result<()> {
     info!("UDP listening on :{}", args.udp_port);
 
     // notify the server
-    let tcp = TcpStream::connect(&args.server)?;
+    let tcp = TcpStream::connect(&args.server_addr)?;
     (&tcp).write_all(
         StreamCommand::construct(tickers, udp.local_addr()?)
             .to_string()
