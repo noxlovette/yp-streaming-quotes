@@ -79,8 +79,7 @@ impl StockQuote {
 
     pub fn generate(ticker: &str) -> Self {
         let mut rng = rand::rng();
-        let price =
-            (rng.random::<f64>() * 490.0 + 10.0 * 100.0).round() / 100.0;
+        let price = ((rng.random::<f64>() * 490.0 + 10.0) * 100.0).round() / 100.0;
         let volume = rng.random_range(100u32..=10_000_000u32);
         let timestamp_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
