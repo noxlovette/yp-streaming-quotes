@@ -8,7 +8,7 @@ pub static REGISTRY: LazyLock<Arc<TickerRegistry>> =
     LazyLock::new(|| TickerRegistry::new());
 
 impl TickerRegistry {
-    const TICKERS_FILE: &str = "assets/tickers.txt";
+    const TICKERS_FILE: &str = "assets/all_tickers.txt";
 
     pub fn from_reader<R: BufRead>(reader: R) -> Self {
         let tickers = reader
