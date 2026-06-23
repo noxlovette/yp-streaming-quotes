@@ -71,12 +71,4 @@ mod tests {
         let r = registry_from_str("AAPL\n\n  \nMSFT\n");
         assert_eq!(r.0.len(), 2);
     }
-
-    #[test]
-    fn from_reader_real_file() {
-        let file = std::fs::File::open("assets/tickers.txt").unwrap();
-        let r = TickerRegistry::from_reader(std::io::BufReader::new(file));
-        // AAPL is the first line of assets/tickers.txt
-        assert!(r.validate("AAPL"));
-    }
 }

@@ -53,7 +53,8 @@ impl StreamCommand {
         let udp_addr = SocketAddr::from_str(tokens.next().unwrap_or_default())
             .map_err(|_| ProtocolError::InvalidAddr)?;
 
-        let ticker_token = tokens.next().ok_or(ProtocolError::EmptyTickerList)?;
+        let ticker_token =
+            tokens.next().ok_or(ProtocolError::EmptyTickerList)?;
 
         let mut tickers = HashSet::new();
 
@@ -101,7 +102,8 @@ mod tests {
 
     #[test]
     fn parse_valid_stream_command() {
-        let cmd = StreamCommand::parse("STREAM 127.0.0.1:9000 AAPL,MSFT").unwrap();
+        let cmd =
+            StreamCommand::parse("STREAM 127.0.0.1:9000 AAPL,MSFT").unwrap();
         assert_eq!(cmd.udp_addr, "127.0.0.1:9000".parse().unwrap());
         assert!(cmd.tickers.contains("AAPL"));
         assert!(cmd.tickers.contains("MSFT"));
@@ -116,13 +118,15 @@ mod tests {
 
     #[test]
     fn duplicate_tickers_are_deduped() {
-        let cmd = StreamCommand::parse("STREAM 127.0.0.1:9000 AAPL,AAPL").unwrap();
+        let cmd =
+            StreamCommand::parse("STREAM 127.0.0.1:9000 AAPL,AAPL").unwrap();
         assert_eq!(cmd.tickers.len(), 1);
     }
 
     #[test]
     fn wrong_command_keyword_returns_invalid_command() {
-        let err = StreamCommand::parse("SUBSCRIBE 127.0.0.1:9000 AAPL").unwrap_err();
+        let err =
+            StreamCommand::parse("SUBSCRIBE 127.0.0.1:9000 AAPL").unwrap_err();
         assert!(matches!(err, ProtocolError::InvalidCommand));
     }
 
@@ -153,8 +157,8 @@ mod tests {
 
     #[test]
     fn unknown_ticker_returns_error() {
-        let err =
-            StreamCommand::parse("STREAM 127.0.0.1:9000 AAPL,FAKEXYZ").unwrap_err();
+        let err = StreamCommand::parse("STREAM 127.0.0.1:9000 AAPL,FAKEXYZ")
+            .unwrap_err();
         assert!(matches!(err, ProtocolError::UnknownTicker(_)));
     }
 }
